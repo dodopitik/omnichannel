@@ -43,16 +43,15 @@ COPY --from=builder /app/packages ./packages
 # Copy node_modules (includes all workspace deps)
 COPY --from=builder /app/node_modules ./node_modules
 
-# Expose port
-EXPOSE 3001
+# Expose port (Render uses PORT env variable, default 10000)
+EXPOSE ${PORT:-10000}
 
 # Environment
 ENV NODE_ENV=production
-ENV PORT=3001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3001/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
+  CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 10000) + '/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
 
 # Start command
 CMD ["node", "apps/api/dist/main.js"]
