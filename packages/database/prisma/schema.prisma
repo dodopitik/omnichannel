@@ -1,0 +1,913 @@
+// ============================================================
+// Omnichannel Marketplace Management System - Prisma Schema
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum RoleType {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  STAFF
+  VIEWER
+}
+
+enum MarketplaceType {
+  SHOPEE
+  TOKOPEDIA
+  TIKTOK_SHOP
+  LAZADA
+  SHOPIFY
+  WOOCOMMERCE
+}
+
+enum MarketplaceStatus {
+  CONNECTED
+  DISCONNECTED
+  TOKEN_EXPIRED
+  CONNECTING
+  ERROR
+}
+
+enum SyncStatus {
+  IDLE
+  SYNCING
+  SUCCESS
+  FAILED
+  PARTIAL
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  DRAFT
+  ARCHIVED
+  OUT_OF_STOCK
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  PACKED
+  READY_TO_SHIP
+  SHIPPED
+  COMPLETED
+  CANCELLED
+  RETURNED
+  REFUNDED
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  ADJUSTMENT
+  TRANSFER_IN
+  TRANSFER_OUT
+  RESERVED
+  RELEASED
+  OPNAME
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  WEBHOOK
+  SMS
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  EXPORT
+  IMPORT
+  SYNC
+}
+
+enum QueueJobStatus {
+  WAITING
+  ACTIVE
+  COMPLETED
+  FAILED
+  DELAYED
+  PAUSED
+}
+
+enum WebhookEventType {
+  ORDER_CREATED
+  ORDER_UPDATED
+  ORDER_CANCELLED
+  PRODUCT_UPDATED
+  STOCK_UPDATED
+  PAYMENT_RECEIVED
+  SHIPMENT_UPDATED
+}
+
+// ─── User & Auth ────────────────────────────────────────────
+
+model User {
+  id                String      @id @default(cuid())
+  email             String      @unique
+  username          String      @unique
+  password          String
+  firstName         String
+  lastName          String
+  avatar            String?
+  phone             String?
+  gender            Gender?
+  dateOfBirth       DateTime?
+  status            UserStatus  @default(PENDING_VERIFICATION)
+  emailVerifiedAt   DateTime?
+  lastLoginAt       DateTime?
+  lastLoginIp       String?
+  failedLoginCount  Int         @default(0)
+  lockedUntil       DateTime?
+  twoFactorEnabled  Boolean     @default(false)
+  twoFactorSecret   String?
+  timezone          String      @default("Asia/Jakarta")
+  language          String      @default("id")
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  deletedAt         DateTime?
+
+  // Relations
+  roles             UserRole[]
+  sessions          Session[]
+  refreshTokens     RefreshToken[]
+  passwordResets    PasswordReset[]
+  emailVerifications EmailVerification[]
+  auditLogs         AuditLog[]     @relation("AuditCreatedBy")
+  activityLogs      ActivityLog[]
+  notifications     Notification[]
+  createdProducts   Product[]     @relation("ProductCreatedBy")
+  updatedProducts   Product[]     @relation("ProductUpdatedBy")
+
+  @@index([email])
+  @@index([username])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model Role {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  displayName String
+  description String?
+  type        RoleType  @default(STAFF)
+  isSystem    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@index([name])
+  @@index([deletedAt])
+  @@map("roles")
+}
+
+model Permission {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  displayName String
+  description String?
+  module      String
+  action      String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  roles       RolePermission[]
+
+  @@index([module])
+  @@index([name])
+  @@map("permissions")
+}
+
+model UserRole {
+  id        String    @id @default(cuid())
+  userId    String
+  roleId    String
+  createdAt DateTime  @default(now())
+  createdBy String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id           String    @id @default(cuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime  @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model Session {
+  id           String    @id @default(cuid())
+  userId       String
+  token        String    @unique
+  deviceInfo   Json?
+  ipAddress    String?
+  userAgent    String?
+  rememberMe   Boolean   @default(false)
+  expiresAt    DateTime
+  lastActiveAt DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model RefreshToken {
+  id          String    @id @default(cuid())
+  userId      String
+  token       String    @unique
+  family      String
+  isRevoked   Boolean   @default(false)
+  revokedAt   DateTime?
+  revokedReason String?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([family])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  usedAt    DateTime?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("password_resets")
+}
+
+model EmailVerification {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  usedAt    DateTime?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("email_verifications")
+}
+
+// ─── Marketplace ────────────────────────────────────────────
+
+model Marketplace {
+  id                String            @id @default(cuid())
+  name              String
+  type              MarketplaceType
+  shopId            String?
+  shopName          String?
+  shopUrl           String?
+  logoUrl           String?
+  status            MarketplaceStatus @default(DISCONNECTED)
+  accessToken       String?
+  refreshToken      String?
+  tokenExpiresAt    DateTime?
+  tokenRefreshedAt  DateTime?
+  webhookUrl        String?
+  webhookSecret     String?
+  webhookStatus     Boolean           @default(false)
+  syncStatus        SyncStatus        @default(IDLE)
+  lastSyncAt        DateTime?
+  lastSyncError     String?
+  syncConfig        Json?
+  rateLimitConfig   Json?
+  isActive          Boolean           @default(true)
+  metadata          Json?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  deletedAt         DateTime?
+  createdBy         String?
+  updatedBy         String?
+
+  products          MarketplaceProduct[]
+  orders            Order[]
+  webhookLogs       WebhookLog[]
+  syncLogs          SyncLog[]
+
+  @@unique([type, shopId])
+  @@index([type])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("marketplaces")
+}
+
+model SyncLog {
+  id            String      @id @default(cuid())
+  marketplaceId String
+  type          String
+  status        SyncStatus
+  message       String?
+  details       Json?
+  itemsSynced   Int         @default(0)
+  itemsFailed   Int         @default(0)
+  startedAt     DateTime    @default(now())
+  completedAt   DateTime?
+  duration      Int?
+
+  marketplace Marketplace @relation(fields: [marketplaceId], references: [id], onDelete: Cascade)
+
+  @@index([marketplaceId])
+  @@index([type])
+  @@index([status])
+  @@index([startedAt])
+  @@map("sync_logs")
+}
+
+// ─── Product & Inventory ─────────────────────────────────────
+
+model Category {
+  id          String     @id @default(cuid())
+  name        String
+  slug        String     @unique
+  description String?
+  imageUrl    String?
+  parentId    String?
+  level       Int        @default(0)
+  sortOrder   Int        @default(0)
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  deletedAt   DateTime?
+
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryTree")
+  products  Product[]
+
+  @@index([slug])
+  @@index([parentId])
+  @@index([deletedAt])
+  @@map("categories")
+}
+
+model Brand {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  slug        String    @unique
+  description String?
+  logoUrl     String?
+  website     String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  products Product[]
+
+  @@index([slug])
+  @@index([deletedAt])
+  @@map("brands")
+}
+
+model Product {
+  id              String        @id @default(cuid())
+  sku             String        @unique
+  barcode         String?
+  name            String
+  slug            String        @unique
+  description     String?
+  shortDescription String?
+  categoryId      String?
+  brandId         String?
+  status          ProductStatus @default(DRAFT)
+  weight          Float?
+  length          Float?
+  width           Float?
+  height          Float?
+  costPrice       Decimal       @db.Decimal(15, 2) @default(0)
+  sellingPrice    Decimal       @db.Decimal(15, 2) @default(0)
+  comparePrice    Decimal?      @db.Decimal(15, 2)
+  tags            String[]
+  images          Json?
+  metadata        Json?
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?
+  createdBy       String?
+  updatedBy       String?
+
+  category        Category?          @relation(fields: [categoryId], references: [id])
+  brand           Brand?             @relation(fields: [brandId], references: [id])
+  variants        ProductVariant[]
+  marketplaceProducts MarketplaceProduct[]
+  stockItems      StockItem[]
+  orderItems      OrderItem[]
+  creator         User?              @relation("ProductCreatedBy", fields: [createdBy], references: [id])
+  updater         User?              @relation("ProductUpdatedBy", fields: [updatedBy], references: [id])
+
+  @@index([sku])
+  @@index([slug])
+  @@index([status])
+  @@index([categoryId])
+  @@index([brandId])
+  @@index([deletedAt])
+  @@map("products")
+}
+
+model ProductVariant {
+  id           String        @id @default(cuid())
+  productId    String
+  sku          String        @unique
+  barcode      String?
+  name         String
+  options      Json
+  costPrice    Decimal       @db.Decimal(15, 2) @default(0)
+  sellingPrice Decimal       @db.Decimal(15, 2) @default(0)
+  weight       Float?
+  imageUrl     String?
+  isActive     Boolean       @default(true)
+  sortOrder    Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  stockItems StockItem[]
+  marketplaceProducts MarketplaceProduct[]
+
+  @@index([productId])
+  @@index([sku])
+  @@index([deletedAt])
+  @@map("product_variants")
+}
+
+model MarketplaceProduct {
+  id                String     @id @default(cuid())
+  productId         String
+  variantId         String?
+  marketplaceId     String
+  marketplaceItemId String?
+  marketplaceModelId String?
+  marketplaceSku    String?
+  marketplaceModelSku String?
+  title             String?
+  status            String?
+  price             Decimal?   @db.Decimal(15, 2)
+  stock             Int        @default(0)
+  syncStatus        SyncStatus @default(IDLE)
+  lastSyncAt        DateTime?
+  syncError         String?
+  marketplaceData   Json?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  product     Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant     ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  marketplace Marketplace @relation(fields: [marketplaceId], references: [id], onDelete: Cascade)
+
+  @@unique([marketplaceId, marketplaceItemId, marketplaceModelId])
+  @@index([marketplaceItemId])
+  @@index([marketplaceModelId])
+  @@index([variantId])
+  @@index([syncStatus])
+  @@map("marketplace_products")
+}
+
+// ─── Warehouse & Stock ───────────────────────────────────────
+
+model Warehouse {
+  id          String    @id @default(cuid())
+  name        String
+  code        String    @unique
+  address     String?
+  city        String?
+  province    String?
+  country     String    @default("ID")
+  postalCode  String?
+  phone       String?
+  email       String?
+  isDefault   Boolean   @default(false)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdBy   String?
+
+  stockItems   StockItem[]
+  transferFrom StockTransfer[] @relation("TransferFrom")
+  transferTo   StockTransfer[] @relation("TransferTo")
+
+  @@index([code])
+  @@index([deletedAt])
+  @@map("warehouses")
+}
+
+model StockItem {
+  id               String    @id @default(cuid())
+  productId        String
+  variantId        String?
+  warehouseId      String
+  totalStock       Int       @default(0)
+  reservedStock    Int       @default(0)
+  availableStock   Int       @default(0)
+  incomingStock    Int       @default(0)
+  minimumStock     Int       @default(0)
+  maximumStock     Int?
+  reorderPoint     Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  product   Product         @relation(fields: [productId], references: [id])
+  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+  warehouse Warehouse       @relation(fields: [warehouseId], references: [id])
+  movements StockMovement[]
+
+  @@unique([productId, variantId, warehouseId])
+  @@index([productId])
+  @@index([warehouseId])
+  @@index([availableStock])
+  @@map("stock_items")
+}
+
+model StockMovement {
+  id          String            @id @default(cuid())
+  stockItemId String
+  type        StockMovementType
+  quantity    Int
+  beforeQty   Int
+  afterQty    Int
+  reference   String?
+  referenceId String?
+  notes       String?
+  metadata    Json?
+  createdAt   DateTime          @default(now())
+  createdBy   String?
+
+  stockItem StockItem @relation(fields: [stockItemId], references: [id])
+
+  @@index([stockItemId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("stock_movements")
+}
+
+model StockTransfer {
+  id            String    @id @default(cuid())
+  fromWarehouseId String
+  toWarehouseId  String
+  status         String    @default("PENDING")
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  createdBy      String?
+  completedAt    DateTime?
+  completedBy    String?
+
+  fromWarehouse Warehouse @relation("TransferFrom", fields: [fromWarehouseId], references: [id])
+  toWarehouse   Warehouse @relation("TransferTo", fields: [toWarehouseId], references: [id])
+  items         StockTransferItem[]
+
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
+  @@index([status])
+  @@map("stock_transfers")
+}
+
+model StockTransferItem {
+  id          String   @id @default(cuid())
+  transferId  String
+  productId   String
+  variantId   String?
+  quantity    Int
+  createdAt   DateTime @default(now())
+
+  transfer StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+
+  @@index([transferId])
+  @@map("stock_transfer_items")
+}
+
+// ─── Customer & Order ────────────────────────────────────────
+
+model Customer {
+  id              String    @id @default(cuid())
+  email           String?
+  phone           String?
+  name            String
+  marketplace     MarketplaceType?
+  marketplaceId   String?
+  totalOrders     Int       @default(0)
+  totalSpending   Decimal   @db.Decimal(15, 2) @default(0)
+  notes           String?
+  isBlacklisted   Boolean   @default(false)
+  blacklistReason String?
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  addresses CustomerAddress[]
+  orders    Order[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([marketplaceId])
+  @@index([deletedAt])
+  @@map("customers")
+}
+
+model CustomerAddress {
+  id         String   @id @default(cuid())
+  customerId String
+  label      String?
+  name       String
+  phone      String?
+  address    String
+  city       String
+  province   String
+  country    String   @default("ID")
+  postalCode String?
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_addresses")
+}
+
+model Order {
+  id                String      @id @default(cuid())
+  orderNumber       String      @unique
+  marketplaceId     String
+  marketplaceOrderId String
+  customerId        String?
+  status            OrderStatus @default(PENDING)
+  paymentStatus     String?
+  shippingStatus    String?
+  subtotal          Decimal     @db.Decimal(15, 2) @default(0)
+  shippingFee       Decimal     @db.Decimal(15, 2) @default(0)
+  discount          Decimal     @db.Decimal(15, 2) @default(0)
+  tax               Decimal     @db.Decimal(15, 2) @default(0)
+  totalAmount       Decimal     @db.Decimal(15, 2) @default(0)
+  profit            Decimal?    @db.Decimal(15, 2)
+  currency          String      @default("IDR")
+  notes             String?
+  shippingAddress   Json?
+  billingAddress    Json?
+  shippingMethod    String?
+  trackingNumber    String?
+  courier           String?
+  paidAt            DateTime?
+  packedAt          DateTime?
+  shippedAt         DateTime?
+  completedAt       DateTime?
+  cancelledAt       DateTime?
+  returnedAt        DateTime?
+  marketplaceData   Json?
+  metadata          Json?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  deletedAt         DateTime?
+  createdBy         String?
+
+  marketplace Marketplace @relation(fields: [marketplaceId], references: [id])
+  customer    Customer?   @relation(fields: [customerId], references: [id])
+  items       OrderItem[]
+  statusHistory OrderStatusHistory[]
+
+  @@index([orderNumber])
+  @@index([marketplaceOrderId])
+  @@index([status])
+  @@index([marketplaceId])
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([deletedAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  productId   String?
+  variantId   String?
+  sku         String
+  name        String
+  quantity    Int
+  unitPrice   Decimal  @db.Decimal(15, 2)
+  totalPrice  Decimal  @db.Decimal(15, 2)
+  costPrice   Decimal? @db.Decimal(15, 2)
+  imageUrl    String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(cuid())
+  orderId   String
+  status    OrderStatus
+  notes     String?
+  createdAt DateTime    @default(now())
+  createdBy String?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_status_history")
+}
+
+// ─── Notification & Webhook ──────────────────────────────────
+
+model Notification {
+  id          String              @id @default(cuid())
+  userId      String?
+  type        NotificationType    @default(INFO)
+  channel     NotificationChannel @default(IN_APP)
+  title       String
+  message     String
+  data        Json?
+  isRead      Boolean             @default(false)
+  readAt      DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime            @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model WebhookLog {
+  id            String           @id @default(cuid())
+  marketplaceId String
+  eventType     WebhookEventType
+  payload       Json
+  headers       Json?
+  signature     String?
+  isVerified    Boolean          @default(false)
+  isProcessed   Boolean          @default(false)
+  processedAt   DateTime?
+  error         String?
+  retryCount    Int              @default(0)
+  createdAt     DateTime         @default(now())
+
+  marketplace Marketplace @relation(fields: [marketplaceId], references: [id])
+
+  @@index([marketplaceId])
+  @@index([eventType])
+  @@index([isProcessed])
+  @@index([createdAt])
+  @@map("webhook_logs")
+}
+
+// ─── Audit & Logging ─────────────────────────────────────────
+
+model AuditLog {
+  id           String      @id @default(cuid())
+  userId       String?
+  action       AuditAction
+  module       String
+  entityId     String?
+  entityType   String?
+  oldValues    Json?
+  newValues    Json?
+  ipAddress    String?
+  userAgent    String?
+  description  String?
+  createdAt    DateTime    @default(now())
+
+  user User? @relation("AuditCreatedBy", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([module])
+  @@index([entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String
+  description String
+  metadata    Json?
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+model ApiLog {
+  id           String   @id @default(cuid())
+  method       String
+  path         String
+  statusCode   Int
+  userId       String?
+  ipAddress    String?
+  requestBody  Json?
+  responseBody Json?
+  duration     Int?
+  error        String?
+  createdAt    DateTime @default(now())
+
+  @@index([method])
+  @@index([path])
+  @@index([statusCode])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("api_logs")
+}
+
+model ErrorLog {
+  id         String   @id @default(cuid())
+  level      String
+  message    String
+  stack      String?
+  context    Json?
+  userId     String?
+  resolved   Boolean  @default(false)
+  resolvedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([level])
+  @@index([resolved])
+  @@index([createdAt])
+  @@map("error_logs")
+}

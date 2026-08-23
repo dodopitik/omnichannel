@@ -1,0 +1,194 @@
+version: '3.9'
+
+services:
+  # ─── PostgreSQL ────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: omnichannel_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-omnichannel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnichannel_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-omnichannel_db}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-omnichannel}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - omnichannel_network
+
+  # ─── Redis ─────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: omnichannel_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-redis_secret}
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy noeviction
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD:-redis_secret}', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - omnichannel_network
+
+  # ─── MinIO (S3-compatible object storage) ──────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: omnichannel_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_secret}
+    ports:
+      - '${MINIO_PORT:-9000}:9000'
+      - '${MINIO_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - omnichannel_network
+
+  # ─── Mailhog (Dev email server) ────────────────────────────────
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: omnichannel_mailhog
+    restart: unless-stopped
+    ports:
+      - '${MAILHOG_SMTP_PORT:-1025}:1025'
+      - '${MAILHOG_UI_PORT:-8025}:8025'
+    networks:
+      - omnichannel_network
+
+  # ─── API (NestJS) ──────────────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+      target: development
+    container_name: omnichannel_api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+    env_file:
+      - ../apps/api/.env
+    ports:
+      - '${API_PORT:-3001}:3001'
+    volumes:
+      - ../apps/api:/app/apps/api
+      - ../packages:/app/packages
+      - /app/node_modules
+      - /app/apps/api/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - omnichannel_network
+
+  # ─── Worker (BullMQ) ───────────────────────────────────────────
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+      target: development
+    container_name: omnichannel_worker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+    env_file:
+      - ../apps/worker/.env
+    volumes:
+      - ../apps/worker:/app/apps/worker
+      - ../packages:/app/packages
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - omnichannel_network
+
+  # ─── Webhook ───────────────────────────────────────────────────
+  webhook:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.webhook
+      target: development
+    container_name: omnichannel_webhook
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+    env_file:
+      - ../apps/webhook/.env
+    ports:
+      - '${WEBHOOK_PORT:-3003}:3003'
+    volumes:
+      - ../apps/webhook:/app/apps/webhook
+      - ../packages:/app/packages
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - omnichannel_network
+
+  # ─── Admin Web (Next.js) ───────────────────────────────────────
+  admin-web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+      target: development
+    container_name: omnichannel_admin_web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+    env_file:
+      - ../apps/admin-web/.env.local
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+    volumes:
+      - ../apps/admin-web:/app/apps/admin-web
+      - ../packages:/app/packages
+      - /app/node_modules
+      - /app/apps/admin-web/node_modules
+      - /app/apps/admin-web/.next
+    depends_on:
+      - api
+    networks:
+      - omnichannel_network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  omnichannel_network:
+    driver: bridge
